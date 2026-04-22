@@ -1,0 +1,141 @@
+import asyncio
+import logging
+import sqlite3
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+
+TOKEN = "BOT_TOKENINGIZ"
+CHANNEL_ID = "sheraliyevxbet"  # @sheraliyevxbet
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+# ===== DATABASE =====
+conn = sqlite3.connect("db.sqlite3")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    referrer INTEGER,
+    referrals INTEGER DEFAULT 0
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)
+""")
+
+conn.commit()
+
+# default time
+cursor.execute("INSERT OR IGNORE INTO settings VALUES ('time','20:30')")
+conn.commit()
+
+# ===== FUNKSYALAR =====
+
+def get_time():
+    cursor.execute("SELECT value FROM settings WHERE key='time'")
+    return cursor.fetchone()[0]
+
+def add_user(user_id, referrer=None):
+    cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO users (user_id, referrer) VALUES (?,?)", (user_id, referrer))
+        if referrer:
+            cursor.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id=?", (referrer,))
+    conn.commit()
+
+async def check_sub(user_id):
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ["member", "creator", "administrator"]
+    except:
+        return False
+
+# ===== START =====
+@dp.message(Command("start"))
+async def start(message: Message):
+    args = message.text.split()
+    ref = int(args[1]) if len(args) > 1 else None
+
+    add_user(message.from_user.id, ref)
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🇺🇿 O‘zbek", callback_data="uz")],
+        [InlineKeyboardButton(text="🇷🇺 Русский", callback_data="ru")]
+    ])
+    await message.answer("Tilni tanlang / Выберите язык", reply_markup=kb)
+
+# ===== TIL TANLASH =====
+@dp.callback_query()
+async def callbacks(call: CallbackQuery):
+    if call.data in ["uz","ru"]:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Bugungi vaqt", callback_data="time")],
+            [InlineKeyboardButton(text="🎯 Kupon kodini olish", callback_data="get")],
+            [InlineKeyboardButton(text="👥 Do‘st taklif", callback_data="ref")]
+        ])
+        await call.message.answer("Menu:", reply_markup=kb)
+
+    elif call.data == "time":
+        t = get_time()
+        await call.message.answer(f"📅 Bugungi kupon: {t}")
+
+    elif call.data == "get":
+        if not await check_sub(call.from_user.id):
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📢 Kanalga o‘tish", url=f"https://t.me/{CHANNEL_ID.replace('@','')}")]
+            ])
+            return await call.message.answer("❗ Avval kanalga obuna bo‘ling", reply_markup=kb)
+
+        await call.message.answer("🎯 Kupon kod: HXPP3")  # keyin dynamic qilamiz
+
+    elif call.data == "ref":
+        link = f"https://t.me/{(await bot.get_me()).username}?start={call.from_user.id}"
+        cursor.execute("SELECT referrals FROM users WHERE user_id=?", (call.from_user.id,))
+        count = cursor.fetchone()[0]
+
+        await call.message.answer(f"👥 Siz: {count} ta odam\n🔗 Link:\n{link}")
+
+# ===== ADMIN: VAQT O‘ZGARTIRISH =====
+@dp.message(Command("settime"))
+async def set_time(message: Message):
+    if message.from_user.id != 7663731929:  # admin ID
+        return
+
+    t = message.text.split()[1]
+    cursor.execute("UPDATE settings SET value=? WHERE key='time'", (t,))
+    conn.commit()
+    await message.answer("Vaqt o‘zgardi!")
+
+# ===== BROADCAST =====
+@dp.message(Command("send"))
+async def broadcast(message: Message):
+    if message.from_user.id != 123456789:
+        return
+
+    text = "🚨 BUGUNGI SIGNAL!\n⏰ Tez orada kupon chiqadi!"
+
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+
+    for user in users:
+        try:
+            await bot.send_message(user[0], text)
+        except:
+            pass
+
+    await message.answer("Yuborildi!")
+
+# ===== RUN =====
+async def main():
+    logging.basicConfig(level=logging.INFO)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
